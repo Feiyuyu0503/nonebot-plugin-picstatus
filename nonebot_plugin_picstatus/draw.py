@@ -1,5 +1,3 @@
-# pyright: reportGeneralTypeIssues=false
-
 import asyncio
 import platform
 import random
@@ -10,11 +8,11 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import nonebot
 import psutil
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from aiohttp import ClientConnectorError, ClientSession, ClientTimeout
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import Bot
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-from psutil._common import sdiskio, sdiskusage, snetio
+from psutil._common import sdiskio, sdiskusage, snetio  # noqa
 
 from .config import TestSiteCfg, config
 from .const import DEFAULT_AVATAR_PATH, DEFAULT_BG_PATH, DEFAULT_FONT_PATH
@@ -31,9 +29,10 @@ from .util import (
     get_qq_avatar,
     get_system_name,
     match_list_regexp,
-    process_text_len,
 )
 from .version import __version__
+
+import GPUtil
 
 GRAY_BG_COLOR = "#aaaaaaaa"
 WHITE_BG_COLOR = config.ps_bg_color
@@ -55,9 +54,10 @@ def get_usage_color(usage: float):
     usage = round(usage)
     if usage >= 90:
         return "orangered"
-    if usage >= 70:
+    elif usage >= 70:
         return "orange"
-    return "lightgreen"
+    else:
+        return "lightgreen"
 
 
 async def draw_header(bot: Bot):
@@ -95,7 +95,7 @@ async def draw_header(bot: Bot):
 
     # 系统启动时间
     booted = format_timedelta(
-        datetime.now() - datetime.fromtimestamp(psutil.boot_time()),
+        datetime.now() - datetime.fromtimestamp(psutil.boot_time())
     )
 
     font_30 = get_font(30)
@@ -140,6 +140,7 @@ async def draw_cpu_memory_usage():
     cpu_freq = psutil.cpu_freq()
     ram_stat = psutil.virtual_memory()
     swap_stat = psutil.swap_memory()
+    gpu = GPUtil.getGPUs()[-1]
 
     font_70 = get_font(70)
     font_25 = get_font(25)
@@ -172,7 +173,8 @@ async def draw_cpu_memory_usage():
     bg_draw.arc(
         (850, 50, 1150, 350),
         -90,
-        (3.6 * swap_stat.percent) - 90,
+        #(3.6 * swap_stat.percent) - 90,
+        (3.6 * gpu.load*100) - 90,
         get_usage_color(swap_stat.percent),
         30,
     )
@@ -180,14 +182,16 @@ async def draw_cpu_memory_usage():
     # 写字
     bg_draw.text((200, 350), "CPU", "black", font_70, "ma")
     bg_draw.text((600, 350), "RAM", "black", font_70, "ma")
-    bg_draw.text((1000, 350), "SWAP", "black", font_70, "ma")
+    #bg_draw.text((1000, 350), "SWAP", "black", font_70, "ma")
+    bg_draw.text((1000, 350), "GPU", "black", font_70, "ma")
 
     # 写占用率
     bg_draw.text((200, 200), f"{cpu_percent:.0f}%", "black", font_70, "mm")
     bg_draw.text((600, 200), f"{ram_stat.percent:.0f}%", "black", font_70, "mm")
     bg_draw.text(
         (1000, 200),
-        f"{swap_stat.percent:.0f}%" if swap_stat.total > 0 else "未部署",
+        #f"{swap_stat.percent:.0f}%" if swap_stat.total > 0 else "未部署",
+        f"{gpu.load*100:.0f}%",
         "black",
         font_70,
         "mm",
@@ -195,18 +199,15 @@ async def draw_cpu_memory_usage():
 
     # 写详细信息
     # CPU
-    try:
-        if cpu_freq.max == 0:
-            if cpu_freq.current == 0:
-                freq_t = "主频未知"
-            else:
-                freq_t = f"当前 {cpu_freq.current:.0f}MHz"
-        elif cpu_freq.max == cpu_freq.current:
-            freq_t = f"最大 {cpu_freq.max:.0f}MHz"
+    if cpu_freq.max == 0:
+        if cpu_freq.current == 0:
+            freq_t = "主频未知"
         else:
-            freq_t = f"{cpu_freq.current:.0f}MHz / {cpu_freq.max:.0f}MHz"
-    except AttributeError:
-        freq_t = "主频未知"
+            freq_t = f"当前 {cpu_freq.current:.0f}MHz"
+    elif cpu_freq.max == cpu_freq.current:
+        freq_t = f"最大 {cpu_freq.max:.0f}MHz"
+    else:
+        freq_t = f"{cpu_freq.current:.0f}MHz / {cpu_freq.max:.0f}MHz"
     bg_draw.text(
         (200, 470),
         f"{cpu_count}核 {cpu_count_logical}线程",
@@ -238,6 +239,7 @@ async def draw_cpu_memory_usage():
         "ms",
     )
 
+    '''
     # SWAP
     swap_used_t = (
         f"{swap_stat.used / 1024 / 1024:.2f}M" if swap_stat.total > 0 else "未知"
@@ -261,6 +263,33 @@ async def draw_cpu_memory_usage():
         font_25,
         "ms",
     )
+    '''
+
+    #GPU
+    #gpu_vram_used_t = (
+    #    f"{gpu.memoryUsed:.2f}M" if gpu.memoryTotal > 0 else "未知"
+    #)
+    #swap_free_t = (
+    #    f"{(swap_stat.total - swap_stat.used) / 1024 / 1024:.2f}M"
+    #    if swap_stat.total > 0
+    #    else "未知"
+    #)
+    bg_draw.text(
+        (1000, 470),
+        f"{gpu.name}",
+        "darkslategray",
+        font_25,
+        "ms",
+    )
+    bg_draw.text(
+        (1000, 500),
+        f"{gpu.memoryUsed}M / {gpu.memoryTotal}M",
+        "darkslategray",
+        font_25,
+        "ms",
+    )
+
+
 
     return bg
 
@@ -284,18 +313,17 @@ async def draw_disk_usage():
                 logger.info(f"空间读取 分区 {_d.mountpoint} 匹配 {_r.re.pattern}，忽略")
                 continue
 
-            display_text = process_text_len(_d.mountpoint)
             # 根据盘符长度计算左侧留空长度用于写字
-            s = font_45.getlength(display_text) + 25
+            s = font_45.getlength(_d.mountpoint) + 25
             if s > left_padding:
                 left_padding = s
 
             try:
-                disks[display_text] = psutil.disk_usage(_d.mountpoint)
+                disks[_d.mountpoint] = psutil.disk_usage(_d.mountpoint)
             except Exception as e:
                 logger.exception(f"读取 {_d.mountpoint} 占用失败")
                 if not config.ps_ignore_bad_parts:
-                    disks[display_text] = e
+                    disks[_d.mountpoint] = e
 
     async def get_disk_io():
         """获取磁盘IO"""
@@ -309,7 +337,6 @@ async def draw_disk_usage():
                 logger.info(f"IO统计 磁盘 {_k} 匹配 {_r.re.pattern}，忽略")
                 continue
 
-            _k = process_text_len(_k)
             _r = io2[_k].read_bytes - _v.read_bytes
             _w = io2[_k].write_bytes - _v.write_bytes
 
@@ -323,7 +350,7 @@ async def draw_disk_usage():
 
     # 列表为空直接返回
     if not (disks or io_rw):
-        return None
+        return
 
     # 计算图片高度，创建背景图
     count = len(disks) + len(io_rw)
@@ -346,7 +373,7 @@ async def draw_disk_usage():
     if disks:
         max_len = 990 - (50 + left_padding)  # 进度条长度
 
-        its: List[Tuple[str, Union[sdiskusage, Exception]]] = disks.items()
+        its: List[Tuple[str, Union[sdiskusage, Exception]]] = disks.items()  # noqa
         for name, usage in its:
             fail = isinstance(usage, Exception)
 
@@ -430,7 +457,6 @@ async def draw_net_io():
                 logger.info(f"网卡 {k_} 上下行0B，忽略")
                 continue
 
-            k_ = process_text_len(k_)
             ios[k_] = (format_byte_count(u_), format_byte_count(d_))
 
     async def get_net_connection():
@@ -440,12 +466,11 @@ async def draw_net_io():
         async def get_result(site: TestSiteCfg):
             try:
                 async with ClientSession(
-                    timeout=ClientTimeout(total=config.ps_test_timeout),
+                    timeout=ClientTimeout(total=config.ps_test_timeout)
                 ) as c:
                     time1 = time.time()
                     async with c.get(
-                        site.url,
-                        proxy=config.proxy if site.use_proxy else None,
+                        site.url, proxy=config.proxy if site.use_proxy else None
                     ) as r:
                         time2 = time.time() - time1
                         connections.append((site.name, (r.status, time2 * 1000)))
@@ -542,8 +567,8 @@ async def get_bg(pic: Union[str, bytes, BytesIO] = None) -> Image.Image:
             if isinstance(pic, str):
                 if pic.startswith("file:///"):
                     return await async_open_img(pic.replace("file:///", "", 1))
-
-                pic = await async_request(pic)
+                else:
+                    pic = await async_request(pic)
 
             if isinstance(pic, bytes):
                 pic = BytesIO(pic)
@@ -565,14 +590,14 @@ async def get_stat_pic(bot: Bot, bg=None):
     img_h = 50  # 这里是上边距，留给下面代码统计图片高度
 
     # 获取背景及各模块图片
-    ret: List[Optional[Image.Image]] = await asyncio.gather(
+    ret: List[Optional[Image.Image]] = await asyncio.gather(  # noqa
         get_bg(bg),
         draw_header(bot),
         draw_cpu_memory_usage(),
         draw_disk_usage(),
         draw_net_io(),
     )
-    bg: Image.Image = ret[0]
+    bg = ret[0]
     ret = ret[1:]
 
     # 统计图片高度
